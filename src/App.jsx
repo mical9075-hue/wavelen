@@ -46,18 +46,52 @@ async function jamendoSearch(query) {
     t.name.toLowerCase().includes(query.toLowerCase()) ||
     t.artist_name.toLowerCase().includes(query.toLowerCase())
   );
-  const url = `${JAMENDO_BASE}/tracks/?client_id=${JAMENDO_CLIENT_ID}&format=json&limit=30&namesearch=${encodeURIComponent(query)}&include=musicinfo&audioformat=mp32`;
-  const res = await fetch(url);
-  const data = await res.json();
-  return data.results || [];
+  try {
+    const url = `${JAMENDO_BASE}/tracks/?client_id=${JAMENDO_CLIENT_ID}&format=json&limit=30&search=${encodeURIComponent(query)}&audioformat=mp32`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Jamendo search failed: ${res.status}`);
+    const data = await res.json();
+    return (data.results || []).map(normalizeTrack);
+  } catch (err) {
+    console.error("jamendoSearch error:", err);
+    return [];
+  }
 }
 
 async function jamendoPopular() {
   if (!HAS_KEY) return DEMO_TRACKS;
-  const url = `${JAMENDO_BASE}/tracks/?client_id=${JAMENDO_CLIENT_ID}&format=json&limit=20&order=popularity_total&audioformat=mp32`;
-  const res = await fetch(url);
-  const data = await res.json();
-  return data.results || [];
+  try {
+    const url = `${JAMENDO_BASE}/tracks/?client_id=${JAMENDO_CLIENT_ID}&format=json&limit=20&order=popularity_total&audioformat=mp32`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Jamendo popular failed: ${res.status}`);
+    const data = await res.json();
+    return (data.results || []).map(normalizeTrack);
+  } catch (err) {
+    console.error("jamendoPopular error:", err);
+    return [];
+  }
+}
+
+async function jamendoByTag(tag) {
+  if (!HAS_KEY) return DEMO_TRACKS;
+  try {
+    const url = `${JAMENDO_BASE}/tracks/?client_id=${JAMENDO_CLIENT_ID}&format=json&limit=30&tags=${encodeURIComponent(tag)}&audioformat=mp32`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Jamendo tag failed: ${res.status}`);
+    const data = await res.json();
+    return (data.results || []).map(normalizeTrack);
+  } catch (err) {
+    console.error("jamendoByTag error:", err);
+    return [];
+  }
+}
+
+// Jamendo sometimes returns http:// audio URLs which get blocked on https sites — force https.
+function normalizeTrack(t) {
+  return {
+    ...t,
+    audio: t.audio ? t.audio.replace(/^http:\/\//i, "https://") : t.audio,
+  };
 }
 
 /* ============================================================================
@@ -65,9 +99,11 @@ async function jamendoPopular() {
 ============================================================================ */
 export default function App() {
   const [view, setView] = useState("home"); // home | search | library | playlist
+  const [viewHistory, setViewHistory] = useState(["home"]);
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
+  const [activeGenre, setActiveGenre] = useState(null);
   const [popular, setPopular] = useState(DEMO_TRACKS);
   const [loadingPopular, setLoadingPopular] = useState(false);
   const [activePlaylist, setActivePlaylist] = useState(null);
@@ -204,6 +240,35 @@ export default function App() {
 
   const isLiked = (track) => likedTracks.some(t => t.id === track?.id);
 
+  const navigateTo = useCallback((nextView) => {
+    setView(prev => {
+      if (prev === nextView) return prev;
+      setViewHistory(h => [...h, nextView]);
+      return nextView;
+    });
+  }, []);
+
+  const goBack = useCallback(() => {
+    setViewHistory(h => {
+      if (h.length <= 1) return h;
+      const newHistory = h.slice(0, -1);
+      setView(newHistory[newHistory.length - 1]);
+      return newHistory;
+    });
+  }, []);
+
+  const canGoBack = viewHistory.length > 1;
+
+  const openGenre = useCallback((genre) => {
+    setActiveGenre(genre);
+    setSearching(true);
+    navigateTo("genre");
+    jamendoByTag(genre.toLowerCase()).then(r => {
+      setSearchResults(r);
+      setSearching(false);
+    }).catch(() => { setSearchResults([]); setSearching(false); });
+  }, [navigateTo]);
+
   const accentGradient = useMemo(() => {
     const seed = currentTrack?.id ? String(currentTrack.id).length : 1;
     const hues = ["#7B61FF", "#C4F135", "#FF6B6B", "#3EC6FF"];
@@ -221,7 +286,7 @@ export default function App() {
       <div className="layout">
         <Sidebar
           view={view}
-          setView={setView}
+          navigateTo={navigateTo}
           playlists={playlists}
           activePlaylist={activePlaylist}
           setActivePlaylist={setActivePlaylist}
@@ -229,7 +294,13 @@ export default function App() {
         />
 
         <main className="main-pane">
-          <TopBar query={query} setQuery={setQuery} setView={setView} />
+          <TopBar
+            query={query}
+            setQuery={setQuery}
+            navigateTo={navigateTo}
+            goBack={goBack}
+            canGoBack={canGoBack}
+          />
 
           <div className="content-scroll">
             {view === "home" && (
@@ -238,7 +309,7 @@ export default function App() {
                 loading={loadingPopular}
                 playlists={playlists}
                 onPlay={(list, i) => playTrackList(list, i)}
-                onOpenPlaylist={(pl) => { setActivePlaylist(pl); setView("playlist"); }}
+                onOpenPlaylist={(pl) => { setActivePlaylist(pl); navigateTo("playlist"); }}
                 currentTrack={currentTrack}
                 isPlaying={isPlaying}
                 toggleLike={toggleLike}
@@ -249,6 +320,20 @@ export default function App() {
             {view === "search" && (
               <SearchView
                 query={query}
+                results={searchResults}
+                searching={searching}
+                onPlay={(list, i) => playTrackList(list, i)}
+                currentTrack={currentTrack}
+                isPlaying={isPlaying}
+                toggleLike={toggleLike}
+                isLiked={isLiked}
+                onOpenGenre={openGenre}
+              />
+            )}
+
+            {view === "genre" && (
+              <GenreResultsView
+                genre={activeGenre}
                 results={searchResults}
                 searching={searching}
                 onPlay={(list, i) => playTrackList(list, i)}
@@ -273,7 +358,7 @@ export default function App() {
             {view === "playlist" && activePlaylist && (
               <PlaylistView
                 playlist={activePlaylist}
-                onBack={() => setView("home")}
+                onBack={goBack}
                 onPlay={(list, i) => playTrackList(list, i)}
                 currentTrack={currentTrack}
                 isPlaying={isPlaying}
@@ -314,7 +399,7 @@ export default function App() {
 /* ============================================================================
    SIDEBAR
 ============================================================================ */
-function Sidebar({ view, setView, playlists, activePlaylist, setActivePlaylist, likedCount }) {
+function Sidebar({ view, navigateTo, playlists, activePlaylist, setActivePlaylist, likedCount }) {
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -323,13 +408,13 @@ function Sidebar({ view, setView, playlists, activePlaylist, setActivePlaylist, 
       </div>
 
       <nav className="nav-group">
-        <button className={`nav-item ${view === "home" ? "active" : ""}`} onClick={() => setView("home")}>
+        <button className={`nav-item ${view === "home" ? "active" : ""}`} onClick={() => navigateTo("home")}>
           <Home size={19} /> <span>Home</span>
         </button>
-        <button className={`nav-item ${view === "search" ? "active" : ""}`} onClick={() => setView("search")}>
+        <button className={`nav-item ${view === "search" ? "active" : ""}`} onClick={() => navigateTo("search")}>
           <Search size={19} /> <span>Search</span>
         </button>
-        <button className={`nav-item ${view === "library" ? "active" : ""}`} onClick={() => setView("library")}>
+        <button className={`nav-item ${view === "library" ? "active" : ""}`} onClick={() => navigateTo("library")}>
           <Library size={19} /> <span>Your Library</span>
         </button>
       </nav>
@@ -341,7 +426,7 @@ function Sidebar({ view, setView, playlists, activePlaylist, setActivePlaylist, 
           <div className="mini-icon"><Plus size={15} /></div>
           <span>Create Playlist</span>
         </button>
-        <button className={`nav-item ${view === "library" ? "active" : ""}`} onClick={() => setView("library")}>
+        <button className={`nav-item ${view === "library" ? "active" : ""}`} onClick={() => navigateTo("library")}>
           <div className="mini-icon liked"><Heart size={13} fill="currentColor" /></div>
           <span>Liked Songs</span>
           {likedCount > 0 && <span className="count-pill">{likedCount}</span>}
@@ -355,7 +440,7 @@ function Sidebar({ view, setView, playlists, activePlaylist, setActivePlaylist, 
           <button
             key={pl.id}
             className={`playlist-row ${activePlaylist?.id === pl.id && view === "playlist" ? "active" : ""}`}
-            onClick={() => { setActivePlaylist(pl); setView("playlist"); }}
+            onClick={() => { setActivePlaylist(pl); navigateTo("playlist"); }}
           >
             <img src={pl.image} alt="" />
             <div className="playlist-row-text">
@@ -372,20 +457,22 @@ function Sidebar({ view, setView, playlists, activePlaylist, setActivePlaylist, 
 /* ============================================================================
    TOP BAR
 ============================================================================ */
-function TopBar({ query, setQuery, setView }) {
+function TopBar({ query, setQuery, navigateTo, goBack, canGoBack }) {
   return (
     <div className="topbar">
       <div className="topbar-nav">
-        <button className="round-btn"><ChevronLeft size={18} /></button>
-        <button className="round-btn"><ChevronRight size={18} /></button>
+        <button className="round-btn" onClick={goBack} disabled={!canGoBack} style={{ opacity: canGoBack ? 1 : 0.4 }}>
+          <ChevronLeft size={18} />
+        </button>
+        <button className="round-btn" disabled style={{ opacity: 0.4 }}><ChevronRight size={18} /></button>
       </div>
       <div className="search-box">
         <Search size={17} className="search-icon" />
         <input
           placeholder="What do you want to play?"
           value={query}
-          onChange={(e) => { setQuery(e.target.value); setView("search"); }}
-          onFocus={() => query && setView("search")}
+          onChange={(e) => { setQuery(e.target.value); navigateTo("search"); }}
+          onFocus={() => query && navigateTo("search")}
         />
         {query && (
           <button className="clear-btn" onClick={() => setQuery("")}><X size={15} /></button>
@@ -492,7 +579,7 @@ function HomeView({ popular, loading, playlists, onPlay, onOpenPlaylist, current
 /* ============================================================================
    SEARCH VIEW
 ============================================================================ */
-function SearchView({ query, results, searching, onPlay, currentTrack, isPlaying, toggleLike, isLiked }) {
+function SearchView({ query, results, searching, onPlay, currentTrack, isPlaying, toggleLike, isLiked, onOpenGenre }) {
   const genres = ["Lo-fi", "Ambient", "Acoustic", "Electronic", "Jazz", "Cinematic", "Indie", "Chill"];
 
   if (!query.trim()) {
@@ -501,9 +588,14 @@ function SearchView({ query, results, searching, onPlay, currentTrack, isPlaying
         <h1 className="page-title">Browse all</h1>
         <div className="genre-grid">
           {genres.map((g, i) => (
-            <div key={g} className="genre-card" style={{ background: GENRE_COLORS[i % GENRE_COLORS.length] }}>
+            <button
+              key={g}
+              className="genre-card"
+              style={{ background: GENRE_COLORS[i % GENRE_COLORS.length] }}
+              onClick={() => onOpenGenre(g)}
+            >
               {g}
-            </div>
+            </button>
           ))}
         </div>
       </div>
@@ -537,6 +629,36 @@ function SearchView({ query, results, searching, onPlay, currentTrack, isPlaying
 }
 
 const GENRE_COLORS = ["#7B61FF", "#C4F135", "#FF6B6B", "#3EC6FF", "#FF9F43", "#E356A7", "#4ED9A8", "#B48CFF"];
+
+/* ============================================================================
+   GENRE RESULTS VIEW
+============================================================================ */
+function GenreResultsView({ genre, results, searching, onPlay, currentTrack, isPlaying, toggleLike, isLiked }) {
+  return (
+    <div className="view-pad">
+      <h1 className="page-title">{genre}</h1>
+      {searching ? (
+        <div className="loading-row"><Loader2 className="spin" size={22} /> Loading {genre} tracks…</div>
+      ) : results.length === 0 ? (
+        <div className="empty-state">
+          <Radio size={38} />
+          <p>No tracks found for {genre}</p>
+          <span>Try a different genre.</span>
+        </div>
+      ) : (
+        <div className="track-list">
+          {results.map((t, i) => (
+            <TrackRow
+              key={t.id} track={t} index={i} list={results}
+              onPlay={onPlay} isActive={currentTrack?.id === t.id} isPlaying={isPlaying}
+              toggleLike={toggleLike} isLiked={isLiked}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /* ============================================================================
    LIBRARY VIEW
@@ -756,7 +878,8 @@ const STYLES = `
 .topbar { display: flex; align-items: center; gap: 14px; padding: 14px 24px; }
 .topbar-nav { display: flex; gap: 8px; }
 .round-btn { width: 32px; height: 32px; border-radius: 50%; background: rgba(0,0,0,.5); border: none; color: var(--text); display: flex; align-items: center; justify-content: center; cursor: pointer; }
-.round-btn:hover { background: rgba(0,0,0,.7); }
+.round-btn:hover:not(:disabled) { background: rgba(0,0,0,.7); }
+.round-btn:disabled { cursor: default; }
 .search-box { flex: 1; max-width: 420px; display: flex; align-items: center; gap: 10px; background: var(--surface-hi); border-radius: 22px; padding: 9px 16px; }
 .search-icon { color: var(--text-dim); flex-shrink: 0; }
 .search-box input { flex: 1; background: none; border: none; outline: none; color: var(--text); font-size: 14px; }
@@ -830,7 +953,12 @@ const STYLES = `
 .heart-btn.liked { color: var(--accent-2); }
 
 .genre-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 16px; }
-.genre-card { height: 100px; border-radius: 8px; padding: 16px; font-weight: 800; font-size: 17px; color: #0B0E10; cursor: pointer; }
+.genre-card {
+  height: 100px; border: none; border-radius: 8px; padding: 16px; font-weight: 800; font-size: 17px;
+  color: #0B0E10; cursor: pointer; text-align: left; font-family: inherit; transition: transform .15s, filter .15s;
+}
+.genre-card:hover { transform: translateY(-2px); filter: brightness(1.08); }
+.genre-card:active { transform: translateY(0); }
 
 .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 60px 0; color: var(--text-dim); text-align: center; }
 .empty-state p { color: var(--text); font-weight: 700; font-size: 15px; margin: 6px 0 0; }
