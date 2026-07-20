@@ -2,8 +2,46 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import {
   Search, Home, Library, Heart, Play, Pause, SkipBack, SkipForward,
   Volume2, Volume1, VolumeX, Repeat, Repeat1, Shuffle, Plus, ListMusic,
-  Loader2, Music2, X, ChevronLeft, ChevronDown, Radio, MoreHorizontal, Check
+  Loader2, Music2, X, ChevronLeft, ChevronDown, Radio, MoreHorizontal, Check,
+  Settings, Trash2, Palette, Clock
 } from "lucide-react";
+
+/* ------------------------------------------------------------------
+  LOCAL STORAGE PERSISTENCE
+------------------------------------------------------------------- */
+const STORAGE_KEYS = {
+  liked: "wavelen_liked",
+  playlists: "wavelen_playlists",
+  searchHistory: "wavelen_search_history",
+  theme: "wavelen_theme",
+  volume: "wavelen_volume",
+};
+
+function loadFromStorage(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch (e) {
+    return fallback;
+  }
+}
+
+function saveToStorage(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (e) {
+    console.error("Storage save failed:", e);
+  }
+}
+
+const THEMES = {
+  lime: { name: "Lime", accent: "#C4F135", accent2: "#7B61FF" },
+  purple: { name: "Purple", accent: "#B48CFF", accent2: "#FF6B6B" },
+  coral: { name: "Coral", accent: "#FF6B6B", accent2: "#3EC6FF" },
+  ocean: { name: "Ocean", accent: "#3EC6FF", accent2: "#C4F135" },
+  gold: { name: "Gold", accent: "#FF9F43", accent2: "#E356A7" },
+  rose: { name: "Rose", accent: "#E356A7", accent2: "#4ED9A8" },
+};
 
 /* ------------------------------------------------------------------
   YOUTUBE CONFIG
@@ -91,10 +129,13 @@ export default function App() {
   const [loadingPopular, setLoadingPopular] = useState(true);
   const [popularError, setPopularError] = useState(null);
 
-  const [playlists, setPlaylists] = useState([]);
+  const [playlists, setPlaylists] = useState(() => loadFromStorage(STORAGE_KEYS.playlists, []));
   const [activePlaylist, setActivePlaylist] = useState(null);
-  const [likedTracks, setLikedTracks] = useState([]);
+  const [likedTracks, setLikedTracks] = useState(() => loadFromStorage(STORAGE_KEYS.liked, []));
   const [showCreatePlaylist, setShowCreatePlaylist] = useState(false);
+  const [searchHistory, setSearchHistory] = useState(() => loadFromStorage(STORAGE_KEYS.searchHistory, []));
+  const [themeKey, setThemeKey] = useState(() => loadFromStorage(STORAGE_KEYS.theme, "lime"));
+  const [showSettings, setShowSettings] = useState(false);
 
   // Player state
   const [queue, setQueue] = useState([]);
@@ -102,7 +143,7 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [volume, setVolume] = useState(70);
+  const [volume, setVolume] = useState(() => loadFromStorage(STORAGE_KEYS.volume, 70));
   const [shuffle, setShuffle] = useState(false);
   const [repeat, setRepeat] = useState("off"); // off | all | one
   const [playerReady, setPlayerReady] = useState(false);
@@ -174,10 +215,30 @@ export default function App() {
         setSearchError(error);
         setSearchResults(results);
         setSearching(false);
+        if (!error && results.length > 0) {
+          setSearchHistory(prev => {
+            const cleaned = prev.filter(q => q.toLowerCase() !== query.trim().toLowerCase());
+            return [query.trim(), ...cleaned].slice(0, 10);
+          });
+        }
       });
     }, 450);
     return () => clearTimeout(t);
   }, [query]);
+
+  /* ---------- persistence: save to localStorage on change ---------- */
+  useEffect(() => { saveToStorage(STORAGE_KEYS.liked, likedTracks); }, [likedTracks]);
+  useEffect(() => { saveToStorage(STORAGE_KEYS.playlists, playlists.filter(p => !p.system)); }, [playlists]);
+  useEffect(() => { saveToStorage(STORAGE_KEYS.searchHistory, searchHistory); }, [searchHistory]);
+  useEffect(() => { saveToStorage(STORAGE_KEYS.theme, themeKey); }, [themeKey]);
+  useEffect(() => { saveToStorage(STORAGE_KEYS.volume, volume); }, [volume]);
+
+  /* ---------- apply theme as CSS variables ---------- */
+  useEffect(() => {
+    const t = THEMES[themeKey] || THEMES.lime;
+    document.documentElement.style.setProperty("--accent", t.accent);
+    document.documentElement.style.setProperty("--accent-2", t.accent2);
+  }, [themeKey]);
 
   /* ---------- play current track ---------- */
   useEffect(() => {
@@ -300,6 +361,18 @@ export default function App() {
     setShowAddToPlaylist(null);
   };
 
+  const removeFromPlaylist = (playlistId, trackId) => {
+    setPlaylists(prev => prev.map(pl => {
+      if (pl.id !== playlistId) return pl;
+      const newTracks = pl.tracks.filter(t => t.id !== trackId);
+      return { ...pl, tracks: newTracks, image: newTracks[0]?.image || null };
+    }));
+  };
+
+  const deletePlaylist = (playlistId) => {
+    setPlaylists(prev => prev.filter(pl => pl.id !== playlistId));
+  };
+
   const navigateTo = useCallback((nextView) => {
     setView(prev => {
       if (prev === nextView) return prev;
@@ -344,10 +417,11 @@ export default function App() {
       <div className="layout">
         <Sidebar view={view} navigateTo={navigateTo} playlists={playlists} activePlaylist={activePlaylist}
           setActivePlaylist={setActivePlaylist} likedCount={likedTracks.length}
-          onCreatePlaylist={() => setShowCreatePlaylist(true)} />
+          onCreatePlaylist={() => setShowCreatePlaylist(true)} onOpenSettings={() => setShowSettings(true)} />
 
         <main className="main-pane">
-          <TopBar query={query} setQuery={setQuery} navigateTo={navigateTo} goBack={goBack} canGoBack={canGoBack} />
+          <TopBar query={query} setQuery={setQuery} navigateTo={navigateTo} goBack={goBack} canGoBack={canGoBack}
+            onOpenSettings={() => setShowSettings(true)} />
 
           <div className="content-scroll">
             {view === "home" && (
@@ -375,7 +449,8 @@ export default function App() {
             {view === "playlist" && activePlaylist && (
               <PlaylistView playlist={playlists.find(p => p.id === activePlaylist.id) || activePlaylist} onBack={goBack} onPlay={playTrackList}
                 currentTrack={currentTrack} isPlaying={isPlaying} toggleLike={toggleLike} isLiked={isLiked}
-                onAddToPlaylist={setShowAddToPlaylist} />
+                onAddToPlaylist={setShowAddToPlaylist} onRemoveFromPlaylist={removeFromPlaylist}
+                onDeletePlaylist={(id) => { deletePlaylist(id); goBack(); }} />
             )}
           </div>
         </main>
@@ -416,6 +491,15 @@ export default function App() {
           onAdd={addToPlaylist} onClose={() => setShowAddToPlaylist(null)}
           onCreateNew={() => { setShowAddToPlaylist(null); setShowCreatePlaylist(true); }} />
       )}
+
+      {showSettings && (
+        <SettingsModal
+          themeKey={themeKey} setThemeKey={setThemeKey}
+          searchHistory={searchHistory} onClearHistory={() => setSearchHistory([])}
+          onSelectHistory={(q) => { setQuery(q); navigateTo("search"); setShowSettings(false); }}
+          onClose={() => setShowSettings(false)}
+        />
+      )}
     </div>
   );
 }
@@ -423,7 +507,7 @@ export default function App() {
 /* ============================================================================
    SIDEBAR (desktop)
 ============================================================================ */
-function Sidebar({ view, navigateTo, playlists, activePlaylist, setActivePlaylist, likedCount, onCreatePlaylist }) {
+function Sidebar({ view, navigateTo, playlists, activePlaylist, setActivePlaylist, likedCount, onCreatePlaylist, onOpenSettings }) {
   return (
     <aside className="sidebar">
       <div className="brand"><div className="brand-mark"><Music2 size={22} /></div><span>Wavelen</span></div>
@@ -452,6 +536,10 @@ function Sidebar({ view, navigateTo, playlists, activePlaylist, setActivePlaylis
           </button>
         ))}
       </div>
+      <div className="sidebar-divider" />
+      <button className="nav-item" onClick={onOpenSettings}>
+        <Settings size={19} /><span>Settings</span>
+      </button>
     </aside>
   );
 }
@@ -480,7 +568,7 @@ function BottomNav({ view, navigateTo, hasTrack }) {
 /* ============================================================================
    TOP BAR
 ============================================================================ */
-function TopBar({ query, setQuery, navigateTo, goBack, canGoBack }) {
+function TopBar({ query, setQuery, navigateTo, goBack, canGoBack, onOpenSettings }) {
   return (
     <div className="topbar">
       <div className="topbar-nav">
@@ -493,6 +581,7 @@ function TopBar({ query, setQuery, navigateTo, goBack, canGoBack }) {
           onFocus={() => query && navigateTo("search")} />
         {query && <button className="clear-btn" onClick={() => setQuery("")}><X size={15} /></button>}
       </div>
+      <button className="settings-btn mobile-only" onClick={onOpenSettings} aria-label="Settings"><Settings size={18} /></button>
     </div>
   );
 }
@@ -694,7 +783,7 @@ function LibraryView({ liked, playlists, onPlay, currentTrack, isPlaying, toggle
 /* ============================================================================
    PLAYLIST VIEW
 ============================================================================ */
-function PlaylistView({ playlist, onBack, onPlay, currentTrack, isPlaying, toggleLike, isLiked, onAddToPlaylist }) {
+function PlaylistView({ playlist, onBack, onPlay, currentTrack, isPlaying, toggleLike, isLiked, onAddToPlaylist, onRemoveFromPlaylist, onDeletePlaylist }) {
   return (
     <div className="view-pad">
       <div className="playlist-hero">
@@ -705,19 +794,43 @@ function PlaylistView({ playlist, onBack, onPlay, currentTrack, isPlaying, toggl
           <span className="pl-hero-sub">{playlist.tracks.length} songs</span>
         </div>
       </div>
-      {playlist.tracks.length > 0 && (
-        <div className="playlist-actions">
+      <div className="playlist-actions">
+        {playlist.tracks.length > 0 && (
           <button className="play-fab" onClick={() => onPlay(playlist.tracks, 0)}><Play size={20} fill="#000" /></button>
-        </div>
-      )}
+        )}
+        {!playlist.system && (
+          <button className="text-btn danger" onClick={() => onDeletePlaylist(playlist.id)}>
+            <Trash2 size={14} /> Delete playlist
+          </button>
+        )}
+      </div>
       {playlist.tracks.length === 0 ? (
         <div className="empty-state"><Music2 size={38} /><p>This playlist is empty</p><span>Tap the ⋯ on any song to add it here.</span></div>
       ) : (
         <div className="track-list">
           {playlist.tracks.map((t, i) => (
-            <TrackRow key={t.id} track={t} index={i} list={playlist.tracks} onPlay={onPlay}
-              isActive={currentTrack?.id === t.id} isPlaying={isPlaying} toggleLike={toggleLike} isLiked={isLiked}
-              onAddToPlaylist={onAddToPlaylist} />
+            <div key={t.id} className={`track-row ${currentTrack?.id === t.id ? "active" : ""}`} onClick={() => onPlay(playlist.tracks, i)}>
+              <div className="track-row-index">
+                {currentTrack?.id === t.id && isPlaying ? (
+                  <div className="playing-bars"><span /><span /><span /></div>
+                ) : currentTrack?.id === t.id ? <Pause size={14} /> : (
+                  <><span className="idx-number">{i + 1}</span><Play size={14} className="idx-play" /></>
+                )}
+              </div>
+              <img src={t.image} alt="" className="track-row-art" />
+              <div className="track-row-meta">
+                <span className="track-row-title">{t.name}</span>
+                <span className="track-row-artist">{t.artist_name}</span>
+              </div>
+              <button className={`heart-btn ${isLiked(t) ? "liked" : ""}`} onClick={(e) => { e.stopPropagation(); toggleLike(t); }}>
+                <Heart size={16} fill={isLiked(t) ? "currentColor" : "none"} />
+              </button>
+              {onRemoveFromPlaylist && !playlist.system && (
+                <button className="more-btn" onClick={(e) => { e.stopPropagation(); onRemoveFromPlaylist(playlist.id, t.id); }} title="Remove from playlist">
+                  <X size={16} />
+                </button>
+              )}
+            </div>
           ))}
         </div>
       )}
@@ -972,6 +1085,59 @@ function AddToPlaylistModal({ track, playlists, onAdd, onClose, onCreateNew }) {
 }
 
 /* ============================================================================
+   SETTINGS MODAL
+============================================================================ */
+function SettingsModal({ themeKey, setThemeKey, searchHistory, onClearHistory, onSelectHistory, onClose }) {
+  return (
+    <div className="sheet-overlay" onClick={onClose}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-handle" />
+        <div className="sheet-header"><h3>Settings</h3><button className="round-btn" onClick={onClose}><X size={18} /></button></div>
+        <div className="sheet-body" style={{ padding: "0 20px 24px" }}>
+
+          <div className="settings-section">
+            <div className="settings-label"><Palette size={15} /> Theme color</div>
+            <div className="theme-grid">
+              {Object.entries(THEMES).map(([key, t]) => (
+                <button key={key} className={`theme-swatch ${themeKey === key ? "active" : ""}`} onClick={() => setThemeKey(key)}>
+                  <span className="theme-dot" style={{ background: t.accent }} />
+                  <span>{t.name}</span>
+                  {themeKey === key && <Check size={14} />}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="settings-section">
+            <div className="settings-label-row">
+              <div className="settings-label"><Clock size={15} /> Search history</div>
+              {searchHistory.length > 0 && (
+                <button className="text-btn danger" onClick={onClearHistory}><Trash2 size={13} /> Clear</button>
+              )}
+            </div>
+            {searchHistory.length === 0 ? (
+              <p className="settings-hint">Your recent searches will appear here.</p>
+            ) : (
+              <div className="history-list">
+                {searchHistory.map((q, i) => (
+                  <button key={i} className="history-item" onClick={() => onSelectHistory(q)}>
+                    <Clock size={14} /> <span>{q}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="settings-section">
+            <p className="settings-hint">Your liked songs, playlists, and preferences are saved on this device automatically.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================================
    STYLES
 ============================================================================ */
 const STYLES = `
@@ -1015,6 +1181,8 @@ html, body { overflow-x: hidden; max-width: 100%; }
 .round-btn { width: 32px; height: 32px; border-radius: 50%; background: rgba(0,0,0,.5); border: none; color: var(--text); display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
 .round-btn:hover:not(:disabled) { background: rgba(0,0,0,.7); }
 .round-btn:disabled { opacity: .35; cursor: default; }
+.settings-btn { width: 36px; height: 36px; border-radius: 50%; background: var(--surface-hi); border: 1px solid var(--border); color: var(--text-dim); display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; transition: color .15s, border-color .15s; }
+.settings-btn:hover { color: var(--text); border-color: var(--accent); }
 .search-box { flex: 1; max-width: 420px; display: flex; align-items: center; gap: 10px; background: var(--surface-hi); border-radius: 22px; padding: 9px 16px; min-width: 0; }
 .search-icon { color: var(--text-dim); flex-shrink: 0; }
 .search-box input { flex: 1; background: none; border: none; outline: none; color: var(--text); font-size: 14px; min-width: 0; width: 100%; }
@@ -1037,6 +1205,8 @@ html, body { overflow-x: hidden; max-width: 100%; }
 .section-header h2 { font-size: 19px; font-weight: 800; letter-spacing: -0.01em; }
 .text-btn { display: flex; align-items: center; gap: 4px; background: none; border: none; color: var(--text-dim); font-size: 12.5px; font-weight: 700; cursor: pointer; }
 .text-btn:hover { color: var(--text); }
+.text-btn.danger { color: #FF6B6B; opacity: .85; }
+.text-btn.danger:hover { opacity: 1; }
 
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 14px; }
 .track-card { background: var(--surface-hi); border-radius: 8px; padding: 10px; cursor: pointer; transition: background .18s; min-width: 0; }
@@ -1089,7 +1259,7 @@ html, body { overflow-x: hidden; max-width: 100%; }
 .eyebrow { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); }
 .playlist-hero-text h1 { font-size: 28px; font-weight: 900; letter-spacing: -0.03em; margin: 0; word-break: break-word; }
 .pl-hero-sub { font-size: 13px; color: var(--text-dim); }
-.playlist-actions { padding: 18px 0; }
+.playlist-actions { padding: 18px 0; display: flex; align-items: center; gap: 18px; }
 .play-fab { width: 52px; height: 52px; border-radius: 50%; background: var(--accent); border: none; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 8px 20px rgba(196,241,53,.3); transition: transform .15s; }
 .play-fab:hover { transform: scale(1.06); }
 
@@ -1166,14 +1336,32 @@ html, body { overflow-x: hidden; max-width: 100%; }
 .add-pl-row:hover { background: var(--surface-hi); }
 .add-pl-img { width: 36px; height: 36px; border-radius: 5px; object-fit: cover; flex-shrink: 0; }
 
+/* Settings */
+.settings-section { padding: 18px 0; border-bottom: 1px solid var(--border); }
+.settings-section:last-child { border-bottom: none; }
+.settings-label { display: flex; align-items: center; gap: 7px; font-size: 13.5px; font-weight: 700; color: var(--text); margin-bottom: 12px; }
+.settings-label-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.settings-label-row .settings-label { margin-bottom: 0; }
+.settings-hint { font-size: 12.5px; color: var(--text-dim); line-height: 1.5; }
+.theme-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.theme-swatch { display: flex; align-items: center; gap: 8px; background: var(--surface-hi); border: 1.5px solid transparent; border-radius: 8px; padding: 10px 12px; cursor: pointer; color: var(--text); font-size: 13px; font-weight: 600; }
+.theme-swatch.active { border-color: var(--accent); }
+.theme-swatch span:nth-child(2) { flex: 1; text-align: left; }
+.theme-dot { width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0; }
+.history-list { display: flex; flex-direction: column; gap: 2px; }
+.history-item { display: flex; align-items: center; gap: 10px; background: none; border: none; color: var(--text-dim); font-size: 13px; padding: 8px 4px; cursor: pointer; text-align: left; border-radius: 6px; }
+.history-item:hover { background: var(--surface-hi); color: var(--text); }
+
 @media (max-width: 900px) {
   .sidebar { display: none; }
   .layout { padding: 0; }
   .main-pane { border-radius: 0; }
   .view-pad { padding: 8px 14px 20px; }
+  .topbar { padding: 12px 14px; gap: 10px; }
 
   .desktop-only { display: none !important; }
   .mobile-only { display: block; }
+  .settings-btn.mobile-only { display: flex; }
 
   .mini-player { position: relative; margin: 0; border-radius: 0; border-top: 1px solid var(--border); }
   .mini-player.empty { margin: 0; border-radius: 0; }
