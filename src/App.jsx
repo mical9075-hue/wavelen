@@ -105,6 +105,58 @@ async function ytSearch(query, maxResults = 25) {
   }
 }
 
+/* ------------------------------------------------------------------
+  QUOTA-SAVING CACHE
+  Search costs 100 units per call; caching identical requests locally
+  means repeat visits/searches don't re-charge the quota.
+------------------------------------------------------------------- */
+function cacheGet(key) {
+  try {
+    const raw = localStorage.getItem("ytcache_" + key);
+    if (!raw) return null;
+    const { data, expires } = JSON.parse(raw);
+    if (Date.now() > expires) { localStorage.removeItem("ytcache_" + key); return null; }
+    return data;
+  } catch (e) { return null; }
+}
+function cacheSet(key, data, ttlMs) {
+  try { localStorage.setItem("ytcache_" + key, JSON.stringify({ data, expires: Date.now() + ttlMs })); } catch (e) {}
+}
+async function ytSearchCached(query, maxResults, ttlMs) {
+  const key = `search_${query.toLowerCase()}_${maxResults}`;
+  const cached = cacheGet(key);
+  if (cached) return cached;
+  const result = await ytSearch(query, maxResults);
+  if (!result.error && result.results.length > 0) cacheSet(key, result, ttlMs);
+  return result;
+}
+
+/* ------------------------------------------------------------------
+  TRENDING CHART — videos.list costs only 1 quota unit vs 100 for
+  search.list, and returns YouTube's actual real-time trending music.
+------------------------------------------------------------------- */
+function trackFromVideosItem(item) {
+  const sn = item.snippet;
+  return {
+    id: item.id,
+    name: decodeEntities(sn.title.replace(/\(Official.*?\)|\[Official.*?\]/gi, "").trim()),
+    artist_name: decodeEntities(sn.channelTitle),
+    image: sn.thumbnails?.high?.url || sn.thumbnails?.medium?.url || sn.thumbnails?.default?.url,
+    isLocal: false,
+  };
+}
+async function ytTrendingChart(regionCode = "PK", maxResults = 20) {
+  const url = `https://www.googleapis.com/youtube/v3/videos?part=snippet&chart=mostPopular&videoCategoryId=10&regionCode=${regionCode}&maxResults=${maxResults}&key=${YT_API_KEY}`;
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data.error) return { error: data.error.message, results: [] };
+    return { error: null, results: (data.items || []).map(trackFromVideosItem) };
+  } catch (err) {
+    return { error: "Network error", results: [] };
+  }
+}
+
 /* ============================================================================
    MAIN APP
 ============================================================================ */
@@ -120,7 +172,6 @@ export default function App() {
   const [popular, setPopular] = useState([]);
   const [loadingPopular, setLoadingPopular] = useState(true);
   const [popularError, setPopularError] = useState(null);
-  const [lastTrendingQuery, setLastTrendingQuery] = useState(null);
   const [trendingUpdatedAt, setTrendingUpdatedAt] = useState(null);
 
   const [playlists, setPlaylists] = useState(() => loadFromStorage(STORAGE_KEYS.playlists, []));
@@ -210,32 +261,36 @@ export default function App() {
     };
   }, []);
 
-  /* ---------- fetch trending (real-time, avoids repeating last query) ---------- */
-  const fetchTrending = useCallback((forceFresh) => {
+  /* ---------- fetch trending — uses videos.list chart (1 quota unit vs 100 for search) ---------- */
+  const fetchTrending = useCallback(() => {
     setLoadingPopular(true);
     setPopularError(null);
-    let pool = TRENDING_QUERY_POOL;
-    if (forceFresh && lastTrendingQuery) pool = pool.filter(q => q !== lastTrendingQuery);
-    const hour = new Date().getHours();
-    const timeBoost = hour < 12 ? "morning" : hour < 18 ? "" : "party";
-    const base = pool[Math.floor(Math.random() * pool.length)];
-    const q = timeBoost && Math.random() > 0.5 ? `${base} ${timeBoost}` : base;
-    ytSearch(q, 20).then(({ error, results }) => {
-      if (error) setPopularError(error);
-      setPopular(results);
-      setLoadingPopular(false);
-      setLastTrendingQuery(base);
-      setTrendingUpdatedAt(Date.now());
+    ytTrendingChart("PK", 20).then(({ error, results }) => {
+      if (!error && results.length > 0) {
+        setPopular(results);
+        setLoadingPopular(false);
+        setTrendingUpdatedAt(Date.now());
+        return;
+      }
+      // fallback: cached search-based trending if the chart endpoint is unavailable
+      const q = TRENDING_QUERY_POOL[Math.floor(Math.random() * TRENDING_QUERY_POOL.length)];
+      ytSearchCached(q, 20, 30 * 60 * 1000).then(({ error: e2, results: r2 }) => {
+        if (e2) setPopularError(e2);
+        setPopular(r2);
+        setLoadingPopular(false);
+        setTrendingUpdatedAt(Date.now());
+      });
     });
-  }, [lastTrendingQuery]);
+  }, []);
 
   /* ---------- initial content load ---------- */
   useEffect(() => {
-    fetchTrending(false);
+    fetchTrending();
+    const dayTTL = 24 * 60 * 60 * 1000;
     Promise.all([
-      ytSearch("Sidhu Moosewala all songs", 12),
-      ytSearch("Arijit Singh romantic songs", 12),
-      ytSearch("Punjabi party songs", 12),
+      ytSearchCached("Sidhu Moosewala all songs", 12, dayTTL),
+      ytSearchCached("Arijit Singh romantic songs", 12, dayTTL),
+      ytSearchCached("Punjabi party songs", 12, dayTTL),
     ]).then(([a, b, c]) => {
       const built = [
         { id: "pl-sidhu", name: "Sidhu Moosewala Mix", image: a.results[0]?.image, tracks: a.results, system: true },
@@ -247,12 +302,12 @@ export default function App() {
     // eslint-disable-next-line
   }, []);
 
-  /* ---------- search debounce ---------- */
+  /* ---------- search debounce (cached 2h — retyping the same thing costs nothing) ---------- */
   useEffect(() => {
-    if (!query.trim()) { setSearchResults([]); setSearchError(null); return; }
+    if (!query.trim() || query.trim().length < 2) { setSearchResults([]); setSearchError(null); return; }
     setSearching(true);
     const t = setTimeout(() => {
-      ytSearch(query, 25).then(({ error, results }) => {
+      ytSearchCached(query.trim(), 25, 2 * 60 * 60 * 1000).then(({ error, results }) => {
         setSearchError(error);
         setSearchResults(results);
         setSearching(false);
@@ -263,7 +318,7 @@ export default function App() {
           });
         }
       });
-    }, 450);
+    }, 550);
     return () => clearTimeout(t);
   }, [query]);
 
@@ -463,7 +518,7 @@ export default function App() {
     setActiveGenre(genre);
     setSearching(true);
     navigateTo("genre");
-    ytSearch(genre.query, 25).then(({ error, results }) => {
+    ytSearchCached(genre.query, 25, 24 * 60 * 60 * 1000).then(({ error, results }) => {
       setSearchError(error); setSearchResults(results); setSearching(false);
     });
   }, [navigateTo]);
@@ -509,7 +564,7 @@ export default function App() {
               <HomeView popular={popular} loading={loadingPopular} error={popularError} playlists={playlists}
                 onPlay={playTrackList} onOpenPlaylist={(pl) => { setActivePlaylist(pl); navigateTo("playlist"); }}
                 currentTrack={currentTrack} isPlaying={isPlaying} toggleLike={toggleLike} isLiked={isLiked}
-                onOpenMenu={(t) => setTrackMenu({ track: t })} onRefresh={() => fetchTrending(true)}
+                onOpenMenu={(t) => setTrackMenu({ track: t })} onRefresh={fetchTrending}
                 updatedAt={trendingUpdatedAt} />
             )}
             {view === "search" && (
