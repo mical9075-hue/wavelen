@@ -157,6 +157,55 @@ async function ytTrendingChart(regionCode = "PK", maxResults = 20) {
   }
 }
 
+/* ------------------------------------------------------------------
+  LOCAL FILE PERSISTENCE (IndexedDB)
+  Actual audio blobs are stored here so imported songs survive app
+  restarts — required for this to behave like a real app once wrapped
+  in Capacitor as an APK. localStorage can't hold binary file data,
+  which is why IndexedDB is used instead.
+------------------------------------------------------------------- */
+const IDB_NAME = "wavelen_db";
+const IDB_STORE = "local_tracks";
+
+function idbOpen() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE, { keyPath: "id" });
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function idbSaveLocalTrack(meta, blob) {
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    tx.objectStore(IDB_STORE).put({ ...meta, blob });
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+}
+async function idbGetAllLocalTracks() {
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, "readonly");
+    const req = tx.objectStore(IDB_STORE).getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function idbDeleteLocalTrack(id) {
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    tx.objectStore(IDB_STORE).delete(id);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
 /* ============================================================================
    MAIN APP
 ============================================================================ */
@@ -183,6 +232,7 @@ export default function App() {
   const [themeMode, setThemeMode] = useState(() => loadFromStorage(STORAGE_KEYS.mode, "dark"));
   const [showSettings, setShowSettings] = useState(false);
   const [localTracks, setLocalTracks] = useState([]);
+  const [loadingLocalTracks, setLoadingLocalTracks] = useState(true);
 
   const [queue, setQueue] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -281,6 +331,18 @@ export default function App() {
         setTrendingUpdatedAt(Date.now());
       });
     });
+  }, []);
+
+  /* ---------- load persisted local files from IndexedDB on startup ---------- */
+  useEffect(() => {
+    idbGetAllLocalTracks().then(records => {
+      const tracks = records.map(r => ({
+        id: r.id, name: r.name, artist_name: r.artist_name, image: null,
+        audio: URL.createObjectURL(r.blob), isLocal: true,
+      }));
+      setLocalTracks(tracks);
+      setLoadingLocalTracks(false);
+    }).catch(() => setLoadingLocalTracks(false));
   }, []);
 
   /* ---------- initial content load ---------- */
@@ -525,18 +587,21 @@ export default function App() {
 
   /* ---------- local file import ---------- */
   const handleFilesSelected = (e) => {
-    const files = Array.from(e.target.files || []);
+    const files = Array.from(e.target.files || []).filter(f => f.type.startsWith("audio/"));
     if (!files.length) return;
-    const newTracks = files.filter(f => f.type.startsWith("audio/")).map((f, i) => ({
-      id: `local-${Date.now()}-${i}`,
-      name: f.name.replace(/\.[^/.]+$/, ""),
-      artist_name: "On this device",
-      image: null,
-      audio: URL.createObjectURL(f),
-      isLocal: true,
-    }));
-    setLocalTracks(prev => [...prev, ...newTracks]);
+    files.forEach((f, i) => {
+      const meta = { id: `local-${Date.now()}-${i}`, name: f.name.replace(/\.[^/.]+$/, ""), artist_name: "On this device" };
+      idbSaveLocalTrack(meta, f).then(() => {
+        setLocalTracks(prev => [...prev, { ...meta, image: null, audio: URL.createObjectURL(f), isLocal: true }]);
+      });
+    });
     e.target.value = "";
+  };
+
+  const removeLocalTrack = (id) => {
+    idbDeleteLocalTrack(id).then(() => {
+      setLocalTracks(prev => prev.filter(t => t.id !== id));
+    });
   };
 
   const accentGradient = ACCENTS[accentKey]?.accent || "#C4F135";
@@ -625,6 +690,7 @@ export default function App() {
           onAddToPlaylist={() => { setShowAddToPlaylist(trackMenu.track); setTrackMenu(null); }}
           contextPlaylistId={trackMenu.contextPlaylistId}
           onRemoveFromPlaylist={() => { removeFromPlaylist(trackMenu.contextPlaylistId, trackMenu.track.id); setTrackMenu(null); }}
+          onRemoveLocal={() => { removeLocalTrack(trackMenu.track.id); setTrackMenu(null); }}
           onClose={() => setTrackMenu(null)} />
       )}
       {showSettings && (
@@ -1175,7 +1241,7 @@ function QueueSheet({ queue, currentIndex, onPlayFromQueue, onClose }) {
 /* ============================================================================
    TRACK OPTIONS SHEET (3-dot menu)
 ============================================================================ */
-function TrackOptionsSheet({ track, isLiked, toggleLike, onAddToQueue, onAddToPlaylist, contextPlaylistId, onRemoveFromPlaylist, onClose }) {
+function TrackOptionsSheet({ track, isLiked, toggleLike, onAddToQueue, onAddToPlaylist, contextPlaylistId, onRemoveFromPlaylist, onRemoveLocal, onClose }) {
   return (
     <div className="sheet-overlay" onClick={onClose}>
       <div className="sheet small" onClick={(e) => e.stopPropagation()}>
@@ -1201,6 +1267,12 @@ function TrackOptionsSheet({ track, isLiked, toggleLike, onAddToQueue, onAddToPl
             <button className="add-pl-row danger" onClick={onRemoveFromPlaylist}>
               <div className="mini-icon"><ListX size={16} /></div>
               <span>Remove from this playlist</span>
+            </button>
+          )}
+          {track.isLocal && (
+            <button className="add-pl-row danger" onClick={onRemoveLocal}>
+              <div className="mini-icon"><Trash2 size={16} /></div>
+              <span>Remove from device</span>
             </button>
           )}
         </div>
