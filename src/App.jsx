@@ -32,6 +32,24 @@ const GENRES = [
   { name: "Old Classics", query: "old bollywood classic songs", color: "#B48CFF", icon: Disc3 },
 ];
 
+const ARTISTS = [
+  { name: "Sidhu Moose Wala", query: "Sidhu Moose Wala songs" },
+  { name: "AP Dhillon", query: "AP Dhillon songs" },
+  { name: "Diljit Dosanjh", query: "Diljit Dosanjh songs" },
+  { name: "Karan Aujla", query: "Karan Aujla songs" },
+  { name: "Shubh", query: "Shubh songs" },
+  { name: "Cheema Y", query: "Cheema Y songs" },
+  { name: "Ammy Virk", query: "Ammy Virk songs" },
+  { name: "Arijit Singh", query: "Arijit Singh songs" },
+  { name: "Badshah", query: "Badshah songs" },
+  { name: "Atif Aslam", query: "Atif Aslam songs" },
+  { name: "Asim Azhar", query: "Asim Azhar songs" },
+  { name: "Young Stunners", query: "Young Stunners songs" },
+  { name: "Snoop Dogg", query: "Snoop Dogg songs" },
+  { name: "Dr. Dre", query: "Dr Dre songs" },
+  { name: "Eminem", query: "Eminem songs" },
+];
+
 /* ------------------------------------------------------------------
   THEME SYSTEM
 ------------------------------------------------------------------- */
@@ -630,7 +648,7 @@ export default function App() {
                 onPlay={playTrackList} onOpenPlaylist={(pl) => { setActivePlaylist(pl); navigateTo("playlist"); }}
                 currentTrack={currentTrack} isPlaying={isPlaying} toggleLike={toggleLike} isLiked={isLiked}
                 onOpenMenu={(t) => setTrackMenu({ track: t })} onRefresh={fetchTrending}
-                updatedAt={trendingUpdatedAt} />
+                updatedAt={trendingUpdatedAt} onOpenArtist={(artist) => openGenre({ name: artist.name, query: artist.query })} />
             )}
             {view === "search" && (
               <SearchView query={query} results={searchResults} searching={searching} error={searchError}
@@ -810,7 +828,7 @@ function TopBar({ query, setQuery, navigateTo, goBack, canGoBack, onOpenSettings
 /* ============================================================================
    TRACK ROW
 ============================================================================ */
-function TrackRow({ track, index, list, onPlay, isActive, isPlaying, isLiked, onOpenMenu }) {
+function TrackRow({ track, index, list, onPlay, isActive, isPlaying, isLiked, toggleLike, onOpenMenu }) {
   return (
     <div className={`track-row ${isActive ? "active" : ""}`} onClick={() => onPlay(list, index)}>
       <div className="track-row-index">
@@ -825,7 +843,9 @@ function TrackRow({ track, index, list, onPlay, isActive, isPlaying, isLiked, on
         <span className="track-row-title">{track.name}</span>
         <span className="track-row-artist">{track.artist_name}</span>
       </div>
-      {isLiked(track) && <Heart size={13} className="mini-heart" fill="currentColor" />}
+      <button className={`heart-btn ${isLiked(track) ? "liked" : ""}`} onClick={(e) => { e.stopPropagation(); toggleLike(track); }}>
+        <Heart size={16} fill={isLiked(track) ? "currentColor" : "none"} />
+      </button>
       <button className="more-btn" onClick={(e) => { e.stopPropagation(); onOpenMenu(track); }}><MoreHorizontal size={18} /></button>
     </div>
   );
@@ -834,7 +854,7 @@ function TrackRow({ track, index, list, onPlay, isActive, isPlaying, isLiked, on
 /* ============================================================================
    HOME VIEW
 ============================================================================ */
-function HomeView({ popular, loading, error, playlists, onPlay, onOpenPlaylist, currentTrack, isPlaying, toggleLike, isLiked, onOpenMenu, onRefresh, updatedAt }) {
+function HomeView({ popular, loading, error, playlists, onPlay, onOpenPlaylist, currentTrack, isPlaying, toggleLike, isLiked, onOpenMenu, onRefresh, updatedAt, onOpenArtist }) {
   const greeting = useMemo(() => {
     const h = new Date().getHours();
     if (h < 12) return "Good morning";
@@ -864,6 +884,9 @@ function HomeView({ popular, loading, error, playlists, onPlay, onOpenPlaylist, 
           ))}
         </div>
       )}
+
+      <div className="section-header"><h2>Popular Artists</h2></div>
+      <ArtistsRow onOpenArtist={onOpenArtist} />
 
       <div className="section-header">
         <h2>Trending now</h2>
@@ -898,7 +921,7 @@ function HomeView({ popular, loading, error, playlists, onPlay, onOpenPlaylist, 
           <div className="track-list">
             {popular.slice(0, 10).map((t, i) => (
               <TrackRow key={t.id} track={t} index={i} list={popular} onPlay={onPlay}
-                isActive={currentTrack?.id === t.id} isPlaying={isPlaying} isLiked={isLiked} onOpenMenu={onOpenMenu} />
+                isActive={currentTrack?.id === t.id} isPlaying={isPlaying} isLiked={isLiked} toggleLike={toggleLike} onOpenMenu={onOpenMenu} />
             ))}
           </div>
         </>
@@ -910,6 +933,38 @@ function HomeView({ popular, loading, error, playlists, onPlay, onOpenPlaylist, 
 /* ============================================================================
    SEARCH VIEW (genre cards with lazy-loaded background images)
 ============================================================================ */
+/* ============================================================================
+   ARTISTS ROW (Home page — lazy-loaded thumbnails, cached 7 days to save quota)
+============================================================================ */
+function ArtistsRow({ onOpenArtist }) {
+  const [images, setImages] = useState({});
+
+  useEffect(() => {
+    ARTISTS.forEach(a => {
+      const cacheKey = `artist_img_${a.name.toLowerCase()}`;
+      const cached = cacheGet(cacheKey);
+      if (cached) { setImages(prev => ({ ...prev, [a.name]: cached })); return; }
+      ytSearchCached(`${a.query} official`, 1, 7 * 24 * 60 * 60 * 1000).then(({ results }) => {
+        if (results[0]?.image) {
+          cacheSet(cacheKey, results[0].image, 7 * 24 * 60 * 60 * 1000);
+          setImages(prev => ({ ...prev, [a.name]: results[0].image }));
+        }
+      });
+    });
+  }, []);
+
+  return (
+    <div className="artists-scroll">
+      {ARTISTS.map(a => (
+        <button key={a.name} className="artist-card" onClick={() => onOpenArtist(a)}>
+          {images[a.name] ? <img src={images[a.name]} alt="" /> : <div className="artist-card-placeholder"><Music2 size={20} /></div>}
+          <span>{a.name}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function SearchView({ query, results, searching, error, onPlay, currentTrack, isPlaying, toggleLike, isLiked, onOpenGenre, onOpenMenu }) {
   if (!query.trim()) {
     return (
@@ -942,7 +997,7 @@ function SearchView({ query, results, searching, error, onPlay, currentTrack, is
         <div className="track-list">
           {results.map((t, i) => (
             <TrackRow key={t.id} track={t} index={i} list={results} onPlay={onPlay}
-              isActive={currentTrack?.id === t.id} isPlaying={isPlaying} isLiked={isLiked} onOpenMenu={onOpenMenu} />
+              isActive={currentTrack?.id === t.id} isPlaying={isPlaying} isLiked={isLiked} toggleLike={toggleLike} onOpenMenu={onOpenMenu} />
           ))}
         </div>
       )}
@@ -953,7 +1008,7 @@ function SearchView({ query, results, searching, error, onPlay, currentTrack, is
 /* ============================================================================
    GENRE RESULTS VIEW
 ============================================================================ */
-function GenreResultsView({ genre, results, searching, error, onPlay, currentTrack, isPlaying, isLiked, onOpenMenu }) {
+function GenreResultsView({ genre, results, searching, error, onPlay, currentTrack, isPlaying, toggleLike, isLiked, onOpenMenu }) {
   return (
     <div className="view-pad">
       <h1 className="page-title">{genre?.name}</h1>
@@ -967,7 +1022,7 @@ function GenreResultsView({ genre, results, searching, error, onPlay, currentTra
         <div className="track-list">
           {results.map((t, i) => (
             <TrackRow key={t.id} track={t} index={i} list={results} onPlay={onPlay}
-              isActive={currentTrack?.id === t.id} isPlaying={isPlaying} isLiked={isLiked} onOpenMenu={onOpenMenu} />
+              isActive={currentTrack?.id === t.id} isPlaying={isPlaying} isLiked={isLiked} toggleLike={toggleLike} onOpenMenu={onOpenMenu} />
           ))}
         </div>
       )}
@@ -978,7 +1033,7 @@ function GenreResultsView({ genre, results, searching, error, onPlay, currentTra
 /* ============================================================================
    LIBRARY VIEW
 ============================================================================ */
-function LibraryView({ liked, playlists, localTracks, onPlay, currentTrack, isPlaying, isLiked, onOpenPlaylist, onOpenMenu, onCreatePlaylist, onImportFiles }) {
+function LibraryView({ liked, playlists, localTracks, onPlay, currentTrack, isPlaying, toggleLike, isLiked, onOpenPlaylist, onOpenMenu, onCreatePlaylist, onImportFiles }) {
   return (
     <div className="view-pad">
       <h1 className="page-title">Your Library</h1>
@@ -1001,7 +1056,7 @@ function LibraryView({ liked, playlists, localTracks, onPlay, currentTrack, isPl
         <div className="track-list" style={{ marginBottom: 20 }}>
           {localTracks.map((t, i) => (
             <TrackRow key={t.id} track={t} index={i} list={localTracks} onPlay={onPlay}
-              isActive={currentTrack?.id === t.id} isPlaying={isPlaying} isLiked={isLiked} onOpenMenu={onOpenMenu} />
+              isActive={currentTrack?.id === t.id} isPlaying={isPlaying} isLiked={isLiked} toggleLike={toggleLike} onOpenMenu={onOpenMenu} />
           ))}
         </div>
       )}
@@ -1013,7 +1068,7 @@ function LibraryView({ liked, playlists, localTracks, onPlay, currentTrack, isPl
         <div className="track-list">
           {liked.map((t, i) => (
             <TrackRow key={t.id} track={t} index={i} list={liked} onPlay={onPlay}
-              isActive={currentTrack?.id === t.id} isPlaying={isPlaying} isLiked={isLiked} onOpenMenu={onOpenMenu} />
+              isActive={currentTrack?.id === t.id} isPlaying={isPlaying} isLiked={isLiked} toggleLike={toggleLike} onOpenMenu={onOpenMenu} />
           ))}
         </div>
       )}
@@ -1024,7 +1079,7 @@ function LibraryView({ liked, playlists, localTracks, onPlay, currentTrack, isPl
 /* ============================================================================
    PLAYLIST VIEW
 ============================================================================ */
-function PlaylistView({ playlist, onBack, onPlay, currentTrack, isPlaying, isLiked, onOpenMenu, onDeletePlaylist }) {
+function PlaylistView({ playlist, onBack, onPlay, currentTrack, isPlaying, toggleLike, isLiked, onOpenMenu, onDeletePlaylist }) {
   return (
     <div className="view-pad">
       <div className="playlist-hero">
@@ -1045,7 +1100,7 @@ function PlaylistView({ playlist, onBack, onPlay, currentTrack, isPlaying, isLik
         <div className="track-list">
           {playlist.tracks.map((t, i) => (
             <TrackRow key={t.id} track={t} index={i} list={playlist.tracks} onPlay={onPlay}
-              isActive={currentTrack?.id === t.id} isPlaying={isPlaying} isLiked={isLiked}
+              isActive={currentTrack?.id === t.id} isPlaying={isPlaying} isLiked={isLiked} toggleLike={toggleLike}
               onOpenMenu={(track) => onOpenMenu(track, playlist)} />
           ))}
         </div>
@@ -1461,6 +1516,12 @@ html, body { overflow-x: hidden; max-width: 100%; }
 .page-title { font-size: 26px; font-weight: 800; letter-spacing: -0.02em; margin: 10px 0 20px; }
 
 .quick-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-bottom: 34px; }
+.artists-scroll { display: flex; gap: 16px; overflow-x: auto; padding: 4px 2px 10px; margin-bottom: 10px; scrollbar-width: none; }
+.artists-scroll::-webkit-scrollbar { display: none; }
+.artist-card { display: flex; flex-direction: column; align-items: center; gap: 8px; background: none; border: none; cursor: pointer; flex-shrink: 0; width: 92px; }
+.artist-card img, .artist-card-placeholder { width: 84px; height: 84px; border-radius: 50%; object-fit: cover; background: var(--surface-hi); display: flex; align-items: center; justify-content: center; color: var(--text-dim); transition: transform .15s; }
+.artist-card:hover img, .artist-card:hover .artist-card-placeholder { transform: scale(1.05); }
+.artist-card span { font-size: 12px; font-weight: 700; color: var(--text); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 92px; }
 .quick-card { display: flex; align-items: center; gap: 12px; background: var(--surface-hi); border: none; border-radius: 6px; overflow: hidden; cursor: pointer; position: relative; height: 60px; text-align: left; min-width: 0; }
 .quick-card:hover { background: var(--surface-hi-2); }
 .quick-card img, .quick-card-placeholder { width: 60px; height: 60px; object-fit: cover; flex-shrink: 0; background: var(--border); display: flex; align-items: center; justify-content: center; color: var(--text-dim); }
@@ -1491,7 +1552,7 @@ html, body { overflow-x: hidden; max-width: 100%; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .track-list { display: flex; flex-direction: column; min-width: 0; }
-.track-row { display: grid; grid-template-columns: 26px 40px 1fr 16px 26px; align-items: center; gap: 10px; padding: 8px 8px; border-radius: 6px; cursor: pointer; transition: background .1s; min-width: 0; }
+.track-row { display: grid; grid-template-columns: 26px 40px 1fr 30px 26px; align-items: center; gap: 8px; padding: 8px 8px; border-radius: 6px; cursor: pointer; transition: background .1s; min-width: 0; }
 .track-row:hover { background: var(--surface-hi); }
 .track-row.active .track-row-title { color: var(--accent); }
 .track-row-index { display: flex; align-items: center; justify-content: center; color: var(--text-dim); font-size: 13px; position: relative; }
