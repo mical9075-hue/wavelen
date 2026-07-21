@@ -4,7 +4,8 @@ import {
   Volume2, Volume1, VolumeX, Repeat, Repeat1, Shuffle, Plus, ListMusic,
   Loader2, Music2, X, ChevronLeft, ChevronDown, Radio, MoreHorizontal, Check,
   Settings, Trash2, Palette, Clock, RefreshCw, Sun, Moon, Monitor,
-  FolderUp, HardDrive, ListPlus, ListX
+  FolderUp, HardDrive, ListPlus, ListX, Flame, Sparkles, Mic2, Heart as HeartIcon,
+  PartyPopper, CloudMoon, Globe2, Disc3
 } from "lucide-react";
 
 /* ------------------------------------------------------------------
@@ -21,17 +22,15 @@ const TRENDING_QUERY_POOL = [
 ];
 
 const GENRES = [
-  { name: "Punjabi", query: "Punjabi hit songs", color: "#7B61FF" },
-  { name: "Bollywood", query: "Bollywood hit songs", color: "#C4F135" },
-  { name: "Hip Hop", query: "hip hop hit songs", color: "#FF6B6B" },
-  { name: "Romantic", query: "romantic hindi songs", color: "#3EC6FF" },
-  { name: "Party", query: "party songs Punjabi Bollywood", color: "#FF9F43" },
-  { name: "Lo-fi", query: "lofi chill songs", color: "#E356A7" },
-  { name: "English Pop", query: "english pop hit songs 2026", color: "#4ED9A8" },
-  { name: "Old Classics", query: "old bollywood classic songs", color: "#B48CFF" },
+  { name: "Punjabi", query: "Punjabi hit songs", color: "#7B61FF", icon: Flame },
+  { name: "Bollywood", query: "Bollywood hit songs", color: "#C4F135", icon: Sparkles },
+  { name: "Hip Hop", query: "hip hop hit songs", color: "#FF6B6B", icon: Mic2 },
+  { name: "Romantic", query: "romantic hindi songs", color: "#3EC6FF", icon: HeartIcon },
+  { name: "Party", query: "party songs Punjabi Bollywood", color: "#FF9F43", icon: PartyPopper },
+  { name: "Lo-fi", query: "lofi chill songs", color: "#E356A7", icon: CloudMoon },
+  { name: "English Pop", query: "english pop hit songs 2026", color: "#4ED9A8", icon: Globe2 },
+  { name: "Old Classics", query: "old bollywood classic songs", color: "#B48CFF", icon: Disc3 },
 ];
-
-const genreThumbCache = {};
 
 /* ------------------------------------------------------------------
   THEME SYSTEM
@@ -791,32 +790,20 @@ function HomeView({ popular, loading, error, playlists, onPlay, onOpenPlaylist, 
    SEARCH VIEW (genre cards with lazy-loaded background images)
 ============================================================================ */
 function SearchView({ query, results, searching, error, onPlay, currentTrack, isPlaying, toggleLike, isLiked, onOpenGenre, onOpenMenu }) {
-  const [genreImages, setGenreImages] = useState(() => ({ ...genreThumbCache }));
-
-  useEffect(() => {
-    if (query.trim()) return;
-    GENRES.forEach(g => {
-      if (genreThumbCache[g.name]) return;
-      ytSearch(g.query, 1).then(({ results }) => {
-        if (results[0]?.image) {
-          genreThumbCache[g.name] = results[0].image;
-          setGenreImages(prev => ({ ...prev, [g.name]: results[0].image }));
-        }
-      });
-    });
-  }, [query]);
-
   if (!query.trim()) {
     return (
       <div className="view-pad">
         <h1 className="page-title">Browse all</h1>
         <div className="genre-grid">
-          {GENRES.map((g) => (
-            <button key={g.name} className="genre-card" style={{ background: g.color }} onClick={() => onOpenGenre(g)}>
-              {genreImages[g.name] && <img src={genreImages[g.name]} alt="" className="genre-card-bg" />}
-              <span className="genre-card-label">{g.name}</span>
-            </button>
-          ))}
+          {GENRES.map((g) => {
+            const Icon = g.icon;
+            return (
+              <button key={g.name} className="genre-card" style={{ background: `linear-gradient(135deg, ${g.color}, ${g.color}cc)` }} onClick={() => onOpenGenre(g)}>
+                <span className="genre-card-label">{g.name}</span>
+                <Icon size={46} className="genre-card-icon" strokeWidth={1.6} />
+              </button>
+            );
+          })}
         </div>
       </div>
     );
@@ -1032,8 +1019,14 @@ function FullPlayerSheet({ track, isPlaying, togglePlay, onNext, onPrev, progres
   const [dragY, setDragY] = useState(0);
   const [dragging, setDragging] = useState(false);
   const startY = useRef(0);
+  const startTime = useRef(0);
 
-  const onTouchStart = (e) => { startY.current = e.touches[0].clientY; setDragging(true); };
+  const onTouchStart = (e) => {
+    if (e.target.closest("button, .progress-track, .volume-track")) return;
+    startY.current = e.touches[0].clientY;
+    startTime.current = Date.now();
+    setDragging(true);
+  };
   const onTouchMove = (e) => {
     if (!dragging) return;
     const delta = e.touches[0].clientY - startY.current;
@@ -1041,12 +1034,15 @@ function FullPlayerSheet({ track, isPlaying, togglePlay, onNext, onPrev, progres
   };
   const onTouchEnd = () => {
     setDragging(false);
-    if (dragY > 110) onClose(); else setDragY(0);
+    const elapsed = Date.now() - startTime.current;
+    const velocity = dragY / Math.max(elapsed, 1);
+    if (dragY > 60 || velocity > 0.5) onClose(); else setDragY(0);
   };
 
   return (
-    <div className="full-player" style={{ background: `linear-gradient(180deg, ${accentGradient}33 0%, var(--bg) 55%)`, transform: `translateY(${dragY}px)`, transition: dragging ? "none" : "transform .25s ease" }}>
-      <div className="full-player-drag-zone" onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
+    <div className="full-player" style={{ background: `linear-gradient(180deg, ${accentGradient}33 0%, var(--bg) 55%)`, transform: `translateY(${dragY}px)`, transition: dragging ? "none" : "transform .25s ease" }}
+      onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
+      <div className="full-player-drag-zone">
         <div className="sheet-handle" />
         <div className="full-player-top">
           <button className="round-btn" onClick={onClose}><ChevronDown size={22} /></button>
@@ -1393,10 +1389,10 @@ html, body { overflow-x: hidden; max-width: 100%; }
 .heart-btn.big { color: var(--text-dim); }
 
 .genre-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 14px; }
-.genre-card { position: relative; height: 90px; border: none; border-radius: 8px; padding: 14px; cursor: pointer; text-align: left; font-family: inherit; overflow: hidden; transition: transform .15s; }
-.genre-card:hover { transform: translateY(-2px); }
-.genre-card-bg { position: absolute; right: -6px; bottom: -10px; width: 68px; height: 68px; object-fit: cover; border-radius: 8px; transform: rotate(18deg); box-shadow: 0 6px 16px rgba(0,0,0,.35); }
-.genre-card-label { position: relative; z-index: 1; font-weight: 800; font-size: 16px; color: #0B0E10; }
+.genre-card { position: relative; height: 90px; border: none; border-radius: 8px; padding: 14px; cursor: pointer; text-align: left; font-family: inherit; overflow: hidden; transition: transform .15s, filter .15s; }
+.genre-card:hover { transform: translateY(-2px); filter: brightness(1.06); }
+.genre-card-icon { position: absolute; right: -6px; bottom: -8px; color: rgba(0,0,0,.22); }
+.genre-card-label { position: relative; z-index: 1; font-weight: 800; font-size: 16px; color: #0B0E10; display: block; }
 
 .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 50px 20px; color: var(--text-dim); text-align: center; }
 .empty-state.small { padding: 26px 20px; }
