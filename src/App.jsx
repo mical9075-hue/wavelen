@@ -33,21 +33,21 @@ const GENRES = [
 ];
 
 const ARTISTS = [
-  { name: "Sidhu Moose Wala", query: "Sidhu Moose Wala songs" },
-  { name: "AP Dhillon", query: "AP Dhillon songs" },
-  { name: "Diljit Dosanjh", query: "Diljit Dosanjh songs" },
-  { name: "Karan Aujla", query: "Karan Aujla songs" },
-  { name: "Shubh", query: "Shubh songs" },
-  { name: "Cheema Y", query: "Cheema Y songs" },
-  { name: "Ammy Virk", query: "Ammy Virk songs" },
-  { name: "Arijit Singh", query: "Arijit Singh songs" },
-  { name: "Badshah", query: "Badshah songs" },
-  { name: "Atif Aslam", query: "Atif Aslam songs" },
-  { name: "Asim Azhar", query: "Asim Azhar songs" },
-  { name: "Young Stunners", query: "Young Stunners songs" },
-  { name: "Snoop Dogg", query: "Snoop Dogg songs" },
-  { name: "Dr. Dre", query: "Dr Dre songs" },
-  { name: "Eminem", query: "Eminem songs" },
+  { name: "Sidhu Moose Wala", query: "Sidhu Moose Wala songs", wiki: "Sidhu Moose Wala" },
+  { name: "AP Dhillon", query: "AP Dhillon songs", wiki: "AP Dhillon" },
+  { name: "Diljit Dosanjh", query: "Diljit Dosanjh songs", wiki: "Diljit Dosanjh" },
+  { name: "Karan Aujla", query: "Karan Aujla songs", wiki: "Karan Aujla" },
+  { name: "Shubh", query: "Shubh songs", wiki: "Shubh" },
+  { name: "Cheema Y", query: "Cheema Y songs", wiki: "Cheema Y" },
+  { name: "Ammy Virk", query: "Ammy Virk songs", wiki: "Ammy Virk" },
+  { name: "Arijit Singh", query: "Arijit Singh songs", wiki: "Arijit Singh" },
+  { name: "Badshah", query: "Badshah songs", wiki: "Badshah (rapper)" },
+  { name: "Atif Aslam", query: "Atif Aslam songs", wiki: "Atif Aslam" },
+  { name: "Asim Azhar", query: "Asim Azhar songs", wiki: "Asim Azhar" },
+  { name: "Young Stunners", query: "Young Stunners songs", wiki: "Young Stunners" },
+  { name: "Snoop Dogg", query: "Snoop Dogg songs", wiki: "Snoop Dogg" },
+  { name: "Dr. Dre", query: "Dr Dre songs", wiki: "Dr. Dre" },
+  { name: "Eminem", query: "Eminem songs", wiki: "Eminem" },
 ];
 
 /* ------------------------------------------------------------------
@@ -147,6 +147,30 @@ async function ytSearchCached(query, maxResults, ttlMs) {
   const result = await ytSearch(query, maxResults);
   if (!result.error && result.results.length > 0) cacheSet(key, result, ttlMs);
   return result;
+}
+
+/* ------------------------------------------------------------------
+  ARTIST IMAGES — fetched directly from Wikipedia's free, keyless
+  REST API (no YouTube quota used, no API key needed, CORS-open).
+  Falls back to a generated colour-avatar with initials if an artist
+  has no Wikipedia photo, so a card is never left blank.
+------------------------------------------------------------------- */
+async function fetchArtistImage(title) {
+  try {
+    const res = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.thumbnail?.source || data.originalimage?.source || null;
+  } catch (e) {
+    return null;
+  }
+}
+function initialsAvatar(name) {
+  const initials = name.split(" ").filter(Boolean).slice(0, 2).map(w => w[0]).join("").toUpperCase();
+  const hues = ["#7B61FF", "#C4F135", "#FF6B6B", "#3EC6FF", "#FF9F43", "#E356A7"];
+  const hue = hues[name.length % hues.length];
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><rect width="120" height="120" fill="${hue}"/><text x="50%" y="50%" dy=".35em" text-anchor="middle" font-family="Arial, sans-serif" font-size="42" font-weight="700" fill="#0B0E10">${initials}</text></svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
 /* ------------------------------------------------------------------
@@ -938,19 +962,22 @@ function HomeView({ popular, loading, error, playlists, onPlay, onOpenPlaylist, 
 ============================================================================ */
 function ArtistsRow({ onOpenArtist }) {
   const [images, setImages] = useState({});
+  const ARTIST_IMG_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days — photos don't change often
 
   useEffect(() => {
+    let cancelled = false;
     ARTISTS.forEach(a => {
-      const cacheKey = `artist_img_${a.name.toLowerCase()}`;
+      const cacheKey = `artist_img_v2_${a.name.toLowerCase()}`;
       const cached = cacheGet(cacheKey);
       if (cached) { setImages(prev => ({ ...prev, [a.name]: cached })); return; }
-      ytSearchCached(`${a.query} official`, 1, 7 * 24 * 60 * 60 * 1000).then(({ results }) => {
-        if (results[0]?.image) {
-          cacheSet(cacheKey, results[0].image, 7 * 24 * 60 * 60 * 1000);
-          setImages(prev => ({ ...prev, [a.name]: results[0].image }));
-        }
+      fetchArtistImage(a.wiki || a.name).then(url => {
+        if (cancelled) return;
+        const finalUrl = url || initialsAvatar(a.name);
+        cacheSet(cacheKey, finalUrl, ARTIST_IMG_TTL);
+        setImages(prev => ({ ...prev, [a.name]: finalUrl }));
       });
     });
+    return () => { cancelled = true; };
   }, []);
 
   return (
